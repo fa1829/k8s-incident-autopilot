@@ -1,0 +1,69 @@
+name: gameday
+
+# Break the service on purpose, check that the detector finds it, apply the verified fix,
+# and prove the service recovers. Run it from the Actions tab and pick a scenario.
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Fault to inject through a bad deploy
+        type: choice
+        options: [memory_leak, crash, not_ready]
+        default: memory_leak
+
+permissions:
+  contents: read
+
+jobs:
+  gameday:
+    runs-on: ubuntu-latest
+    env:
+      SCENARIO: ${{ inputs.scenario }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: docker build -t incident-autopilot:dev .
+      - uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: gameday
+          config: k8s/kind-config.yaml
+      - run: kind load docker-image incident-autopilot:dev --name gameday
+      - name: Deploy a healthy version
+        run: |
+          kubectl apply -k k8s/overlays/kind
+          kubectl -n demo rollout status deployment/web --timeout=180s
+          mkdir -p evidence
+          kubectl -n demo get pods -o wide | tee evidence/0-healthy.txt
+      - name: Ship a bad change
+        run: |
+          kubectl -n demo set env deployment/web FAULT_MODE="$SCENARIO"
+          date -u +%FT%TZ | tee evidence/1-bad-deploy-at.txt
+      - name: Wait until the detector sees the incident (max 4 minutes)
+        run: |
+          for i in $(seq 1 48); do
+            kubectl -n demo get pods -o json > evidence/2-pods-during.json
+            if ! python -m remediate.cli --namespace demo --file evidence/2-pods-during.json > evidence/2-detection.txt; then
+              echo "detected after ~$((i*5))s"; cat evidence/2-detection.txt; date -u +%FT%TZ > evidence/2-detected-at.txt; exit 0
+            fi
+            sleep 5
+          done
+          echo "incident was not detected"; exit 1
+      - name: Apply the verified remediation
+        run: python -m remediate.cli --namespace demo --file evidence/2-pods-during.json --apply | tee evidence/3-remediation.txt || true
+      - name: Prove recovery
+        run: |
+          kubectl -n demo rollout status deployment/web --timeout=180s
+          sleep 70  # let the readiness grace period pass for any leftover pods
+          kubectl -n demo get pods -o wide | tee evidence/4-after.txt
+          kubectl -n demo get deployment web -o jsonpath='{.spec.template.spec.containers[0].env}' | tee evidence/4-env.txt
+          python -m remediate.cli --namespace demo --from-cluster | tee evidence/4-final-check.txt
+          date -u +%FT%TZ | tee evidence/4-recovered-at.txt
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gameday-${{ inputs.scenario }}
+          path: evidence/

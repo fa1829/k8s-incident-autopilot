@@ -1,0 +1,146 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "metadata": {
+        "name": "web-5c8d7f9b4-q2w3e",
+        "namespace": "demo",
+        "labels": {
+          "app": "web",
+          "pod-template-hash": "5c8d7f9b4"
+        },
+        "ownerReferences": [
+          {
+            "kind": "ReplicaSet",
+            "name": "web-5c8d7f9b4"
+          }
+        ]
+      },
+      "spec": {
+        "containers": [
+          {
+            "name": "app",
+            "resources": {
+              "limits": {
+                "memory": "128Mi"
+              }
+            }
+          }
+        ]
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "app",
+            "ready": false,
+            "restartCount": 4,
+            "state": {
+              "waiting": {
+                "reason": "CrashLoopBackOff",
+                "message": "back-off 40s restarting failed container"
+              }
+            },
+            "lastState": {
+              "terminated": {
+                "reason": "OOMKilled",
+                "exitCode": 137
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "name": "web-5c8d7f9b4-r4t5y",
+        "namespace": "demo",
+        "labels": {
+          "app": "web",
+          "pod-template-hash": "5c8d7f9b4"
+        },
+        "ownerReferences": [
+          {
+            "kind": "ReplicaSet",
+            "name": "web-5c8d7f9b4"
+          }
+        ]
+      },
+      "spec": {
+        "containers": [
+          {
+            "name": "app",
+            "resources": {
+              "limits": {
+                "memory": "128Mi"
+              }
+            }
+          }
+        ]
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "app",
+            "ready": false,
+            "restartCount": 3,
+            "state": {
+              "running": {
+                "startedAt": "2026-11-11T05:02:00Z"
+              }
+            },
+            "lastState": {
+              "terminated": {
+                "reason": "OOMKilled",
+                "exitCode": 137
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "name": "api-6f7a8b9c0-z1x2c",
+        "namespace": "demo",
+        "labels": {
+          "app": "api",
+          "pod-template-hash": "6f7a8b9c0"
+        },
+        "ownerReferences": [
+          {
+            "kind": "ReplicaSet",
+            "name": "api-6f7a8b9c0"
+          }
+        ]
+      },
+      "spec": {
+        "containers": [
+          {
+            "name": "app",
+            "resources": {
+              "limits": {
+                "memory": "128Mi"
+              }
+            }
+          }
+        ]
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "app",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-11-11T05:00:00Z"
+              }
+            },
+            "lastState": {}
+          }
+        ]
+      }
+    }
+  ]
+}

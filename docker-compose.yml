@@ -1,0 +1,15 @@
+# Local loop without Kubernetes: the service plus Prometheus with the alert rules loaded.
+#   FAULT_MODE=errors docker compose up --build   -> watch HighErrorRate in http://localhost:9090/alerts
+services:
+  web:
+    build: .
+    environment:
+      FAULT_MODE: ${FAULT_MODE:-none}
+    ports: ["8080:8080"]
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert-rules.yaml:/etc/prometheus/alert-rules.yaml:ro
+    ports: ["9090:9090"]
+    depends_on: [web]

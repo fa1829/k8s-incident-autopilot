@@ -1,0 +1,79 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: pytest -q
+
+  validate-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render manifests and validate them against the Kubernetes schema
+        run: |
+          kubectl kustomize k8s/overlays/kind > rendered.yaml
+          docker run --rm -i ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary - < rendered.yaml
+      - name: Check and unit-test the Prometheus alert rules
+        run: |
+          docker run --rm -v "$PWD/monitoring:/m" -w /m --entrypoint promtool prom/prometheus:v2.54.1 check rules alert-rules.yaml
+          docker run --rm -v "$PWD/monitoring:/m" -w /m --entrypoint promtool prom/prometheus:v2.54.1 test rules alert-rules.test.yaml
+
+  build-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t incident-autopilot:${{ github.sha }} .
+      - name: Fail on fixable critical vulnerabilities in the image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: incident-autopilot:${{ github.sha }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  e2e-kind:
+    needs: [lint-test, validate-config]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: docker build -t incident-autopilot:dev .
+      - uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: ci
+          config: k8s/kind-config.yaml
+      - run: kind load docker-image incident-autopilot:dev --name ci
+      - name: Deploy and wait for the rollout
+        run: |
+          kubectl apply -k k8s/overlays/kind
+          kubectl -n demo rollout status deployment/web --timeout=180s
+      - name: Smoke test through the Service
+        run: |
+          kubectl -n demo port-forward svc/web 8080:80 &
+          sleep 3
+          curl -fsS localhost:8080/readyz
+          curl -fsS localhost:8080/metrics | grep http_requests_total
+      - name: The incident detector must report a healthy cluster
+        run: python -m remediate.cli --namespace demo --from-cluster
+      - name: Show cluster state on failure
+        if: failure()
+        run: kubectl -n demo get all,events -o wide

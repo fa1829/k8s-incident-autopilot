@@ -1,0 +1,51 @@
+# Unit tests for the alert rules:  promtool test rules monitoring/alert-rules.test.yaml
+rule_files:
+  - alert-rules.yaml
+evaluation_interval: 1m
+tests:
+  - name: 10% errors for 10 minutes fires HighErrorRate
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{path="/",status="200"}'
+        values: '0+90x15'
+      - series: 'http_requests_total{path="/",status="500"}'
+        values: '0+10x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "More than 5% of requests are failing"
+              runbook: "docs/RUNBOOK.md#high-error-rate"
+  - name: 1% errors does not fire
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{path="/",status="200"}'
+        values: '0+99x15'
+      - series: 'http_requests_total{path="/",status="500"}'
+        values: '0+1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: HighErrorRate
+        exp_alerts: []
+  - name: OOMKilled container with a fresh restart fires ContainerOOMKilled
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="demo",pod="web-1",container="app",reason="OOMKilled"}'
+        values: '1x15'
+      - series: 'kube_pod_container_status_restarts_total{namespace="demo",pod="web-1",container="app"}'
+        values: '0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: ContainerOOMKilled
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              namespace: demo
+              pod: web-1
+              container: app
+            exp_annotations:
+              summary: "demo/web-1 was OOMKilled"
+              runbook: "docs/RUNBOOK.md#oomkilled"

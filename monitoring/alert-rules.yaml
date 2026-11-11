@@ -1,0 +1,51 @@
+# Alerts that catch a problem before users report it.
+# Application alerts use the service's own /metrics; cluster alerts need kube-state-metrics.
+groups:
+  - name: service-slo
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{path="/",status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_requests_total{path="/"}[5m])), 1e-9) > 0.05
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "More than 5% of requests are failing"
+          runbook: "docs/RUNBOOK.md#high-error-rate"
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{path="/"}[5m]))) > 1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "95th percentile latency is above 1 second"
+          runbook: "docs/RUNBOOK.md#high-latency"
+  - name: kubernetes-workloads
+    rules:
+      - alert: ContainerOOMKilled
+        expr: |
+          max by (namespace, pod, container) (kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}) == 1
+          and on (namespace, pod, container)
+          increase(kube_pod_container_status_restarts_total[10m]) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} was OOMKilled"
+          runbook: "docs/RUNBOOK.md#oomkilled"
+      - alert: PodCrashLooping
+        expr: increase(kube_pod_container_status_restarts_total[15m]) > 3
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} restarted more than 3 times in 15 minutes"
+          runbook: "docs/RUNBOOK.md#crashloopbackoff"
+      - alert: DeploymentRolloutStuck
+        expr: kube_deployment_status_replicas_unavailable > 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.deployment }} has unavailable replicas for 10 minutes"
+          runbook: "docs/RUNBOOK.md#rollout-stuck"
