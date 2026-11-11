@@ -170,3 +170,35 @@ def test_cli_clean_cluster_exits_zero(pod, tmp_path):
     f = tmp_path / "pods.json"
     f.write_text(json.dumps(pods(pod())))
     assert main(["--namespace", "demo", "--file", str(f)]) == 0
+
+
+# ---------- lessons from the first game day ----------
+def rs(name, revision, namespace="demo"):
+    return {"metadata": {"name": name, "namespace": namespace,
+                         "annotations": {"deployment.kubernetes.io/revision": str(revision)}}}
+
+
+def test_terminating_pods_are_ignored(pod):
+    p = pod(last_state={"terminated": {"reason": "OOMKilled"}}, ready=False, restarts=6)
+    p["metadata"]["deletionTimestamp"] = "2026-11-11T06:50:40Z"
+    assert classify(pods(p)) == []
+
+
+def test_failures_in_an_older_revision_are_ignored(pod):
+    # Game day 1: after the memory bump, the newest revision was briefly healthy while a pod of the
+    # older leaking revision was still crashing. Rolling back from there would restore the leak.
+    old_failing = pod(name="web-5fd444b58-aaaaa", pod_hash="5fd444b58", ready=False, restarts=9,
+                      last_state={"terminated": {"reason": "OOMKilled"}})
+    new_healthy = pod(name="web-d78f8f59c-bbbbb", pod_hash="d78f8f59c")
+    replicasets = {"items": [rs("web-5fd444b58", 2), rs("web-d78f8f59c", 3)]}
+    assert classify(pods(old_failing, new_healthy), rs_list=replicasets) == []
+
+
+def test_rollback_only_when_newest_revision_fails(pod):
+    good = pod(name="web-7d9cb49cf7-ccccc", pod_hash="7d9cb49cf7")
+    bad = pod(name="web-5fd444b58-ddddd", pod_hash="5fd444b58", ready=False, restarts=2,
+              last_state={"terminated": {"reason": "OOMKilled"}})
+    replicasets = {"items": [rs("web-7d9cb49cf7", 4), rs("web-5fd444b58", 5)]}
+    [inc] = classify(pods(good, bad), rs_list=replicasets)
+    assert inc.revision == 5 and inc.healthy_other_revision
+    assert playbook(inc).action == ROLLOUT_UNDO

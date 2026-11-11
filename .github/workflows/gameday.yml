@@ -45,14 +45,15 @@ jobs:
         run: |
           for i in $(seq 1 48); do
             kubectl -n demo get pods -o json > evidence/2-pods-during.json
-            if ! python -m remediate.cli --namespace demo --file evidence/2-pods-during.json > evidence/2-detection.txt; then
+            kubectl -n demo get replicasets -o json > evidence/2-rs-during.json
+            if ! python -m remediate.cli --namespace demo --file evidence/2-pods-during.json --rs-file evidence/2-rs-during.json > evidence/2-detection.txt; then
               echo "detected after ~$((i*5))s"; cat evidence/2-detection.txt; date -u +%FT%TZ > evidence/2-detected-at.txt; exit 0
             fi
             sleep 5
           done
           echo "incident was not detected"; exit 1
       - name: Apply the verified remediation
-        run: python -m remediate.cli --namespace demo --file evidence/2-pods-during.json --apply | tee evidence/3-remediation.txt || true
+        run: python -m remediate.cli --namespace demo --file evidence/2-pods-during.json --rs-file evidence/2-rs-during.json --apply | tee evidence/3-remediation.txt || true
       - name: Prove recovery
         run: |
           kubectl -n demo rollout status deployment/web --timeout=180s

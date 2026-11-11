@@ -26,7 +26,8 @@ class Incident:
     memory_limit: str | None = None
     detail: str = ""
     pod_hash: str = ""
-    healthy_other_revision: bool = False  # an older/other ReplicaSet of this Deployment is still healthy
+    revision: int | None = None  # Deployment revision of the failing pods (from their ReplicaSet), if known
+    healthy_other_revision: bool = False  # another revision of this Deployment is still serving healthy pods
     pods: list[str] = field(default_factory=list)
 
 
@@ -102,24 +103,64 @@ def classify_pod(pod: dict, restart_threshold: int = 3, not_ready_grace_s: float
     return incidents
 
 
+def _is_terminating(pod: dict) -> bool:
+    """Pods that are already being deleted (for example after a rollback) are not incidents."""
+    return bool(pod.get("metadata", {}).get("deletionTimestamp"))
+
+
+def _rs_revisions(rs_list: dict | None) -> dict[tuple[str, str], int]:
+    """Map (namespace, ReplicaSet name) to the Deployment revision recorded on the ReplicaSet."""
+    revisions: dict[tuple[str, str], int] = {}
+    for rs in (rs_list or {}).get("items", []) or []:
+        meta = rs.get("metadata", {})
+        rev = (meta.get("annotations") or {}).get("deployment.kubernetes.io/revision")
+        if rev and str(rev).isdigit():
+            revisions[(meta.get("namespace", "default"), meta.get("name", ""))] = int(rev)
+    return revisions
+
+
+def _rs_name(pod: dict) -> str | None:
+    for owner in pod.get("metadata", {}).get("ownerReferences", []) or []:
+        if owner.get("kind") == "ReplicaSet":
+            return owner.get("name")
+    return None
+
+
 def _is_healthy(pod: dict) -> bool:
     statuses = pod.get("status", {}).get("containerStatuses", []) or []
     return bool(statuses) and all(cs.get("ready") and "running" in (cs.get("state") or {}) for cs in statuses)
 
 
 def classify(pod_list: dict, restart_threshold: int = 3, not_ready_grace_s: float = 60,
-             now: datetime | None = None) -> list[Incident]:
-    """Classify every pod, then merge incidents of the same kind on the same Deployment."""
+             now: datetime | None = None, rs_list: dict | None = None) -> list[Incident]:
+    """Classify every pod, then merge incidents of the same kind on the same Deployment.
+
+    With `rs_list` (`kubectl get rs -o json`), the detector knows which revision each pod belongs
+    to: it only reports failures in the newest revision (older ones are already being replaced)
+    and only suggests a rollback when the failing pods are the newest revision.
+    """
     merged: dict[tuple[str, str, str], Incident] = {}
     healthy_hashes: dict[tuple[str, str], set[str]] = {}
-    pods = pod_list.get("items", []) or []
+    revisions = _rs_revisions(rs_list)
+    newest: dict[tuple[str, str], int] = {}
+    pods = [p for p in (pod_list.get("items", []) or []) if not _is_terminating(p)]
+    for pod in pods:
+        dep, rs = _deployment_of(pod), _rs_name(pod)
+        ns = pod.get("metadata", {}).get("namespace", "default")
+        if dep and (ns, rs) in revisions:
+            newest[(ns, dep)] = max(newest.get((ns, dep), 0), revisions[(ns, rs)])
     for pod in pods:
         dep = _deployment_of(pod)
         if dep and _is_healthy(pod):
             key = (pod.get("metadata", {}).get("namespace", "default"), dep)
             healthy_hashes.setdefault(key, set()).add(pod["metadata"].get("labels", {}).get("pod-template-hash", ""))
     for pod in pods:
+        rev = revisions.get((pod.get("metadata", {}).get("namespace", "default"), _rs_name(pod)))
         for inc in classify_pod(pod, restart_threshold, not_ready_grace_s, now):
+            inc.revision = rev
+            latest = newest.get((inc.namespace, inc.deployment))
+            if rev is not None and latest is not None and rev < latest:
+                continue  # an older revision that the current rollout is replacing
             others = healthy_hashes.get((inc.namespace, inc.deployment), set()) - {inc.pod_hash}
             inc.healthy_other_revision = bool(others)
             key = (inc.namespace, inc.deployment, inc.kind)
