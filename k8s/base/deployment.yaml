@@ -9,6 +9,7 @@ spec:
   replicas: 2
   revisionHistoryLimit: 5
   progressDeadlineSeconds: 120
+  minReadySeconds: 30   # a new pod must stay Ready for 30s before it counts as available
   strategy:
     type: RollingUpdate
     rollingUpdate:
